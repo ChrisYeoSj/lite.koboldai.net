@@ -2542,6 +2542,8 @@ Current version: 38
 	var custom_claude_endpoint = "https://api.anthropic.com";
 	var custom_claude_key = "";
 	var custom_claude_model = "";
+	var custom_standard_api_endpoint = "https://huggingface.co";
+	var custom_standard_api_key = "";
 	var uses_cors_proxy = false; //we start off attempting a direct connection. switch to proxy if that fails
 	var synchro_polled_response = null;
 	var synchro_pending_stream = ""; //used for token pseduo streaming for kobold api only
@@ -2990,7 +2992,7 @@ Current version: 38
 
 	function is_using_custom_ep()
 	{
-		return (custom_oai_key!=""||custom_kobold_endpoint!=""||custom_scale_key!=""||custom_claude_key!="");
+		return (custom_oai_key!=""||custom_kobold_endpoint!=""||custom_scale_key!=""||custom_claude_key!=""||custom_standard_api_key!="");
 	}
 
 	function is_using_web_lite()
@@ -4113,6 +4115,11 @@ Current version: 38
 			document.getElementById("claudecustom").classList.remove("hidden");
 			document.getElementById("custom_claude_endpoint").value = custom_claude_endpoint;
 		}
+		else if(epchoice==4)
+		{
+			document.getElementById("standardapicustom").classList.remove("hidden");
+			document.getElementById("custom_standard_api_endpoint").value = custom_standard_api_endpoint;
+		}
 	}
 
 	
@@ -4371,6 +4378,42 @@ Current version: 38
 				document.getElementById("connectstatus").innerHTML = "Connected to Claude Endpoint";
 				render_gametext();				
 			
+			}
+		}else if(epchoice==4) //standard endpoint
+		{
+			let desired_standard_api_key = document.getElementById("custom_standard_api_key").value.trim();
+			let desired_standard_api_ep = document.getElementById("custom_standard_api_endpoint").value.trim();
+			
+			if(desired_standard_api_ep!="" && desired_standard_api_ep.slice(-1)=="/")
+			{
+				desired_standard_api_ep = desired_standard_api_ep.slice(0, -1);
+			}
+			if(desired_standard_api_ep!="" && desired_standard_api_ep.length > 4 && !desired_standard_api_ep.slice(-4).toLowerCase().includes("/v")) {
+				desired_standard_api_ep = desired_standard_api_ep + "/v1";
+			}
+			if(desired_standard_api_key!="" && desired_standard_api_ep!="")
+			{				
+				hide_popups();
+
+				//good to go
+				custom_standard_api_endpoint = desired_standard_api_ep;
+				custom_standard_api_key = desired_standard_api_key;
+				selected_models = [{ "performance": 100.0, "queued": 0.0, "eta": 0, "name": "Custom API", "count": 1 }];
+				selected_workers = [];
+				if (perfdata == null) {
+					//generate some fake perf data if horde is offline and using custom endpoint
+					perfdata = {
+						"queued_requests": 0,
+						"queued_tokens": 0,
+						"past_minute_tokens": 0,
+						"worker_count": 0
+					};
+					document.body.classList.add("connected");
+					document.getElementById("connectstatus").classList.remove("color_orange");
+					document.getElementById("connectstatus").classList.add("color_green");
+				}
+				document.getElementById("connectstatus").innerHTML = "Connected to Standard API Endpoint";
+				render_gametext();				
 			}
 		}
 	}
@@ -4713,6 +4756,10 @@ Current version: 38
 			x.type = "text";
 		}
 		x = document.getElementById("custom_claude_key");
+		if (x && x.type === "password") {
+			x.type = "text";
+		}
+		x = document.getElementById("custom_standard_api_key");
 		if (x && x.type === "password") {
 			x.type = "text";
 		}
@@ -5751,7 +5798,6 @@ Current version: 38
 			}
 			else if (custom_oai_key != "")//handle for OAI
 			{
-
 				let targetep = (custom_oai_endpoint + oai_submit_endpoint);
 
 				//original range between 1 and 3, scale to 0 and 2
@@ -5900,6 +5946,65 @@ Current version: 38
 						else {
 							//error occurred, maybe captcha failed
 							console.error("error occurred in Claude generation");
+							clear_poll_flags();
+							render_gametext();
+							msgbox("Error occurred during text generation.");
+						}
+					})
+					.catch((error) => {
+						console.error('Error:', error);
+						clear_poll_flags();
+						render_gametext();
+						msgbox("Error while submitting prompt: " + error);
+					});
+			}
+			else if (custom_standard_api_key != "")//handle for OAI
+			{
+				let targetep = (custom_standard_api_endpoint); //standard_api_endpoint should already be submit endpoint
+
+				//original range between 1 and 3, scale to 0 and 2
+				let scaled_rep_pen = (submit_payload.params.rep_pen - 1.0);
+				//logit bias prevents <|endoftext|>
+				let customStandardApiPayload =
+				{
+					"max_tokens": submit_payload.params.max_length,
+					"presence_penalty": scaled_rep_pen,
+					"temperature": submit_payload.params.temperature,
+					"top_p": submit_payload.params.top_p,
+				}
+
+				customStandardApiPayload.prompt = submit_payload.prompt;
+
+				fetch(targetep, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': 'Bearer ' + custom_standard_api_key,
+					},
+					body: JSON.stringify(customStandardApiPayload),
+					referrerPolicy: 'no-referrer',
+				})
+					.then((response) => response.json())
+					.then((data) => {
+						console.log("sync finished response: " + JSON.stringify(data));
+						if (custom_standard_api_key != "" && data.choices != null && data.choices.length > 0) {
+							let dch = data.choices[0];
+							if (dch.text) {
+								synchro_polled_response = dch.text;
+							}
+							else if (dch.message) {
+								synchro_polled_response = dch.message.content;
+							}
+							else {
+								console.error("Error, unknown standard api response");
+								clear_poll_flags();
+								render_gametext();
+								msgbox("Error, unknown standard api response");
+							}
+						}
+						else {
+							//error occurred, maybe captcha failed
+							console.error("error occurred in standard api generation");
 							clear_poll_flags();
 							render_gametext();
 							msgbox("Error occurred during text generation.");
@@ -6416,8 +6521,7 @@ Current version: 38
 			return;
 		}
 		document.getElementById("abortgen").classList.add("hidden");
-		if (pending_response_id && pending_response_id != "-1" && pending_response_id != "") 
-		{	
+		if (pending_response_id && pending_response_id != "-1" && pending_response_id != "") {	
 			if (poll_ticks_passed > (4/(poll_interval_base_text*0.001))) //4sec passed
 			{
 				document.getElementById("abortgen").classList.remove("hidden");
@@ -6550,8 +6654,7 @@ Current version: 38
 						});
 				}
 			}
-		}
-		else {
+		} else {
 			console.log("Nothing to update: " + pending_response_id);
 		}
 	}
@@ -6802,6 +6905,10 @@ Current version: 38
 				else if(custom_claude_key!="")
 				{
 					whorun = "<br>You're using the Claude API";
+				}
+				else if(custom_standard_api_key !="")
+				{
+					whorun = "<br>You're using a Custom Standard API";
 				}
 				else {
 					whorun = "<br>There are <span class=\"color_orange\">" + selected_models.reduce((s, a) => s + a.count, 0) + "</span> <a class=\"color_green\" href=\"#\" onclick=\"get_and_show_workers()\">volunteer(s)</a> running selected models with a total queue length of <span class=\"color_orange\">"+ selected_models.reduce((s, a) => s + a.queued, 0) + "</span> tokens";
@@ -7611,9 +7718,6 @@ Current version: 38
 			<div class="lastreq" id="lastreq2" style="padding-top: 4px; color:#999999"><span class="color_gray">Avoid sending privacy sensitive information. <a href="#" onclick="explain_horde()">Click here for more info</a>.</span></div>
 		  </div>
 		</div>
-
-	
-
 		<div class="popupcontainer flex hidden" id="quickstartcontainer">
 			<div class="popupbg flex"></div>
 			<div class="scenariopopup">
@@ -7726,6 +7830,7 @@ Current version: 38
 				<option value="1">OpenAI API</option>
 				<option value="2">Spellbook By Scale API</option>
 				<option value="3">Claude By Anthropic API</option>
+				<option value="4">Standard Conforming API</option>
 			</select>	
 			</div>
 			<div id="koboldcustom" class="aidgpopuplistheader anotelabel">
@@ -7784,6 +7889,15 @@ Current version: 38
 					<option value="claude-instant-v1">claude-instant-v1</option>
 					<option value="claude-instant-v1-100k">claude-instant-v1-100k</option>
 				</select>				
+			</div>
+			<div id="standardapicustom" class="aidgpopuplistheader anotelabel hidden">
+				Entering your Custom API key will allow you to use KoboldAI Lite with their API.<br><br>
+				Note that KoboldAI Lite takes no responsibility for your usage or consequences of this feature.<br><br>
+				<span class="color_red">Please Note to add CORS to your API.</span><br><br>
+				<span class="color_red">We're using the Model that the API provides.</span><br><br>
+				<span class="color_green" style="font-weight: bold;">Please input Custom API URL and Key.</span><br><br>
+				<input class="form-control" type="text" id="custom_standard_api_endpoint" placeholder="Custom API URL" value="">
+				<input class="form-control" type="password" id="custom_standard_api_key" placeholder="Custom API Key" value="" onfocus="focus_api_keys()" onblur="blur_api_keys()"><br>
 			</div>
 			<div class="popupfooter">
 				<button type="button" class="btn btn-primary" onclick="connect_custom_endpoint()">Connect</button>
